@@ -265,8 +265,10 @@
   }
   .hero-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 
-  /* MOBILE LOADER — masks WebGL warmup so first-scroll animation always works.
-     Stays for at least 500ms (intentional, not a glitch), fades out when ready. */
+  /* MOBILE LOADER — RETIRED. It existed to mask WebGL shader warmup, but the
+     mobile hero is Canvas 2D now (zero warmup) and the name is plain DOM text,
+     so there is nothing to mask: the overlay only delayed first paint ~1s and
+     read as a stray pulsing dot. Kept (display:none) so JS refs stay valid. */
   .m-loader {
     position: fixed;
     inset: 0;
@@ -291,7 +293,7 @@
     0%, 100% { transform: scale(1);   box-shadow: 0 0 0 0   rgba(233, 30, 99, 0.55); }
     50%      { transform: scale(1.5); box-shadow: 0 0 0 14px rgba(233, 30, 99, 0); }
   }
-  @media (max-width: 767px) { .m-loader { display: flex; } }
+  /* (mobile display rule removed — see RETIRED note above) */
 
   /* SOLID hero text overlays (state 1 and state 4) */
   .hero-text {
@@ -922,7 +924,7 @@
 
 <a class="skip-link" href="#about">Skip to content</a>
 
-<!-- Mobile-only loader (gives WebGL time to compile + warm GPU before first scroll) -->
+<!-- Retired mobile loader — never displayed (mobile hero is Canvas 2D, no warmup to mask) -->
 <div class="m-loader" id="mLoader" aria-hidden="true"></div>
 
 <!-- Architectural background -->
@@ -1495,7 +1497,7 @@
 
   <footer>
     <div>© 2026 Gunjan Sharma</div>
-    <div>v 1.2 <span class="pink">·</span> handwritten html / built with care</div>
+    <div>v 1.3 <span class="pink">·</span> handwritten html / built with care</div>
   </footer>
 
 </main>
@@ -1573,10 +1575,14 @@
 
   /* ---------- Shared cluster labels (DOM) + de-collision ---------- */
   const labelsWrap = document.getElementById("clusterLabels");
-  function renderLabels(nodes, sat) {
+  function renderLabels(nodes, sat, cwOpt, chOpt) {
     if (!labelsWrap) return;
     labelsWrap.innerHTML = "";
-    const cw = window.innerWidth / 2, ch = window.innerHeight / 2;
+    // Default center = viewport (desktop path, unchanged). The mobile path
+    // passes its stage-box center so labels track the canvas clusters even
+    // when innerHeight ≠ 100vh (phone URL bar visible).
+    const cw = (cwOpt != null) ? cwOpt : window.innerWidth / 2;
+    const ch = (chOpt != null) ? chOpt : window.innerHeight / 2;
     nodes.forEach(n => {
       const el = document.createElement("div");
       el.className = "cluster-label" + (n.kind === "pink" ? " is-pink" : "") + (n.kind === "primary" ? " is-primary" : "");
@@ -1995,10 +2001,21 @@
     const heroTextName  = document.getElementById("heroTextName");
     const heroTextOutro = document.getElementById("heroTextOutro");
 
-    let W = window.innerWidth, H = window.innerHeight;
+    // Size from the sticky stage's CSS box (100vh), NOT window.innerHeight.
+    // On phones innerHeight changes every time the browser URL bar collapses/
+    // expands while scrolling; the 100vh box does not. Sizing from the box
+    // (a) keeps canvas coordinates aligned with the DOM hero text at load
+    //     (innerHeight < 100vh while the URL bar shows — the old code drew a
+    //      vertically stretched, offset frame), and
+    // (b) means the first scroll's URL-bar collapse changes nothing, so the
+    //     hero can't rebuild/jump mid-scroll (the old "jarring" first scroll).
+    const stage = canvas.parentElement; // .hero-sticky, height: 100vh
+    function stageW() { return (stage && stage.clientWidth)  || window.innerWidth; }
+    function stageH() { return (stage && stage.clientHeight) || window.innerHeight; }
+    let W = stageW(), H = stageH();
     let DPR = Math.min(window.devicePixelRatio || 1, 2);
     function resize2D() {
-      W = window.innerWidth; H = window.innerHeight;
+      W = stageW(); H = stageH();
       DPR = Math.min(window.devicePixelRatio || 1, 2);
       // Retina-crisp: back the canvas at device resolution, draw in CSS px.
       canvas.width  = Math.round(W * DPR);
@@ -2114,7 +2131,7 @@
     let graphData = buildGraph2D();
     let graphPos  = graphData.positions;
     let edgePos   = graphData.edgePos;
-    renderLabels(graphData.nodes, graphData.sat);
+    renderLabels(graphData.nodes, graphData.sat, W / 2, H / 2);
     const radials = new Float32Array(COUNT * 2);
     const sizes   = new Float32Array(COUNT);
     const colors  = new Uint8Array(COUNT);  // 0 = ink, 1 = pink
@@ -2145,7 +2162,10 @@
 
     function computeProgress() {
       const rect = wrapper.getBoundingClientRect();
-      const total = wrapper.offsetHeight - window.innerHeight;
+      // Sticky travel = wrapper (320vh) minus stage box (100vh). Both are
+      // URL-bar-stable, unlike innerHeight — so progress can't jump when the
+      // browser chrome collapses mid-scroll.
+      const total = wrapper.offsetHeight - stageH();
       return Math.max(0, Math.min(1, (-rect.top) / total));
     }
 
@@ -2158,7 +2178,7 @@
         graphData = buildGraph2D();
         graphPos  = graphData.positions;
         edgePos   = graphData.edgePos;
-        renderLabels(graphData.nodes, graphData.sat);
+        renderLabels(graphData.nodes, graphData.sat, W / 2, H / 2);
         needsResize = false;
       }
 
@@ -2240,7 +2260,12 @@
     let resizeT;
     window.addEventListener("resize", () => {
       clearTimeout(resizeT);
-      resizeT = setTimeout(() => { needsResize = true; }, 160);
+      resizeT = setTimeout(() => {
+        // URL-bar show/hide fires `resize` but leaves the 100vh stage box
+        // unchanged — skip those so scrolling never re-shuffles the hero.
+        // Real changes (rotation, split-screen) still rebuild.
+        if (stageW() !== W || stageH() !== H) needsResize = true;
+      }, 160);
     });
 
     // Start IMMEDIATELY using the fallback-sampled positions — never gate first
